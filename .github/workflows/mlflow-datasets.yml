@@ -1,0 +1,30 @@
+name: Dataset Versioning
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  dataset:
+    runs-on: ubuntu-latest
+
+    env:
+      MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install pandas
+          pip install pyarrow
+          pip install mlflow
+
+      - name: Build dataset
+        run: |
+          python src/data/make_dataset.py
