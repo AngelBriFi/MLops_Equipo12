@@ -8,7 +8,17 @@ import os
 import gzip
 from pathlib import Path
 import hashlib
+import json
+import mlflow
 
+def file_hash(filepath):
+    sha = hashlib.sha256()
+
+    with open(filepath, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            sha.update(chunk)
+
+    return sha.hexdigest()
 
 @click.command()
 @click.argument('input_filepath', type=click.Path(exists=True))
@@ -41,7 +51,51 @@ def main(input_filepath, output_filepath):
     df['Inicio_del_viaje'] = pd.to_datetime(df['Inicio_del_viaje'],format="%Y-%m-%d %H:%M:%S")
     df['Fin_del_viaje'] = pd.to_datetime(df['Fin_del_viaje'],format="%Y-%m-%d %H:%M:%S")
 
-    df.to_parquet(f"{output_filepath}/mibici_data.parquet")
+    PARQUET_FILE = f"{output_filepath}/mibici_data.parquet"
+    df.to_parquet(PARQUET_FILE)
+    
+    mlflow.set_experiment("dataset-versioning")
+    with mlflow.start_run():
+        SCHEMA_FILE = Path(f"{output_filepath}/schema.json")
+        METADATA_FILE = Path(f"{output_filepath}/metadata.json")
+
+        schema =  pd.io.json.build_table_schema(df)
+
+        with open(SCHEMA_FILE, "w") as f:
+            json.dump(schema, f, indent=2)
+
+        dataset_hash = file_hash(PARQUET_FILE)
+
+        metadata = {
+            "rows": len(df),
+            "columns": len(df.columns),
+            "dataset_hash": dataset_hash
+        }
+
+        with open(METADATA_FILE, "w") as f:
+            json.dump(metadata, f, indent=2)
+
+        # MLflow dataset tracking
+        # dataset = mlflow.data.from_pandas(
+        #     df,
+        #     source=str(RAW_FILE),
+        #     name="trips_dataset"
+        # )
+
+        # mlflow.log_input(dataset)
+
+        mlflow.log_param("dataset_hash", dataset_hash)
+
+        mlflow.log_metric("rows", len(df))
+        mlflow.log_metric("columns", len(df.columns))
+        mlflow.log_metric(
+            "null_count",
+            int(df.isna().sum().sum())
+        )
+
+        mlflow.log_artifact(str(PARQUET_FILE))
+        mlflow.log_artifact(str(SCHEMA_FILE))
+        mlflow.log_artifact(str(METADATA_FILE))
 
     print("DATASET CREATED", output_filepath)
 
