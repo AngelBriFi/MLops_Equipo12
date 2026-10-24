@@ -5,7 +5,6 @@ from pathlib import Path
 from dotenv import find_dotenv, load_dotenv
 import pandas as pd
 import os
-import gzip
 from pathlib import Path
 import hashlib
 import json
@@ -28,7 +27,7 @@ def main(input_filepath, output_filepath):
         cleaned data ready to be analyzed (saved in ../processed).
     """
     logger = logging.getLogger(__name__)
-    logger.info('making final data set from raw data')
+    logger.info('making interim data set from raw data')
 
     #get to root project path
     project_dir = Path(__file__).resolve().parents[2]
