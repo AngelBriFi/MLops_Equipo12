@@ -75,15 +75,6 @@ def main(input_filepath, output_filepath):
         with open(METADATA_FILE, "w") as f:
             json.dump(metadata, f, indent=2)
 
-        # MLflow dataset tracking
-        # dataset = mlflow.data.from_pandas(
-        #     df,
-        #     source=str(RAW_FILE),
-        #     name="trips_dataset"
-        # )
-
-        # mlflow.log_input(dataset)
-
         mlflow.log_param("dataset_hash", dataset_hash)
 
         mlflow.log_metric("rows", len(df))
