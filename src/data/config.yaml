@@ -1,0 +1,13 @@
+paths:
+  raw_data: data/raw
+  interim: data/interim
+  processed_data: data/processed
+
+fileNames:
+  interim: interim
+  processed: processed
+
+fileTypes:
+  raw: csv
+  interim: parquet
+  processed: parquet

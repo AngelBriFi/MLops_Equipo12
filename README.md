@@ -55,3 +55,13 @@ Project Organization
 --------
 
 <p><small>Project based on the <a target="_blank" href="https://drivendata.github.io/cookiecutter-data-science/">cookiecutter data science project template</a>. #cookiecutterdatascience</small></p>
+
+--------
+
+Cada fase del proyecto tiene su archivo config.yaml:
+    -/src/data el archivo config esta pensado en contener la configuracion del paths, nombres de archivos y tipos de archivos para modificacion de los datos, esto incluye /features por el momento.
+    -/src/models: el archivo config contiene la configuracion de ajuste de hiperparametros.
+
+
+El pipeline completo puede ser ejecutado mediante: mlflow run .
+

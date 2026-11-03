@@ -1,0 +1,5 @@
+name: Mibici pipeline
+
+entry_points:
+  main:
+    command: python run_pipeline.py

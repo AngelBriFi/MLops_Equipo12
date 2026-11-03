@@ -9,7 +9,9 @@ from pathlib import Path
 import hashlib
 import json
 import mlflow
+import yaml
 
+# Create hash for experiments ID
 def file_hash(filepath):
     sha = hashlib.sha256()
 
@@ -19,20 +21,28 @@ def file_hash(filepath):
 
     return sha.hexdigest()
 
-@click.command()
-@click.argument('input_filepath', type=click.Path(exists=True))
-@click.argument('output_filepath', type=click.Path())
-def main(input_filepath, output_filepath):
+def main():
     """ Runs data processing scripts to turn raw data from (../raw) into
         cleaned data ready to be analyzed (saved in ../processed).
     """
-    logger = logging.getLogger(__name__)
-    logger.info('making interim data set from raw data')
+    
+
+    logger = logging.getLogger('MAKE DATASET')
+    logger.info('Making interim data set from raw data')
 
     #get to root project path
     project_dir = Path(__file__).resolve().parents[2]
-    print(project_dir)
-    rawP = project_dir.joinpath(input_filepath)
+
+    # Load config from folder data
+    with open(f'{project_dir}/src/data/config.yaml', "r") as f:
+        config = yaml.safe_load(f)
+
+    fileName = config['fileNames']['interim']
+    fileType = config['fileTypes']['interim']
+    pathRaw = config['paths']['raw_data']
+    pathInterim = config['paths']['interim']
+
+    rawP = project_dir.joinpath(pathRaw)
 
     dirs = []
     for item in os.listdir(rawP):
@@ -50,44 +60,56 @@ def main(input_filepath, output_filepath):
     df['Inicio_del_viaje'] = pd.to_datetime(df['Inicio_del_viaje'],format="%Y-%m-%d %H:%M:%S")
     df['Fin_del_viaje'] = pd.to_datetime(df['Fin_del_viaje'],format="%Y-%m-%d %H:%M:%S")
 
-    PARQUET_FILE = f"{output_filepath}/mibici_data.parquet"
-    df.to_parquet(PARQUET_FILE)
+    interP = project_dir.joinpath(pathInterim)
+
+    if not Path(interP).exists():
+        os.mkdir(interP)
+
+    if str(fileType).lower() == 'parquet':
+        OUTPUT_FILE = f"{interP}/{fileName}.parquet"
+        df.to_parquet(OUTPUT_FILE)
+    elif str(fileType).lower() == 'csv':
+        OUTPUT_FILE = f"{interP}/{fileName}.csv"
+        df.to_csv(OUTPUT_FILE)
+    else:
+        raise Exception("Incorrect data type output, check the config yaml in /data")
     
-    mlflow.set_experiment("dataset-versioning")
-    with mlflow.start_run():
-        SCHEMA_FILE = Path(f"{output_filepath}/schema.json")
-        METADATA_FILE = Path(f"{output_filepath}/metadata.json")
+    # mlflow.set_experiment("datasetToInterim")
+    # with mlflow.start_run(nested=True):
+    SCHEMA_FILE = Path(f"{interP}/schema.json")
+    METADATA_FILE = Path(f"{interP}/metadata.json")
 
-        schema =  pd.io.json.build_table_schema(df)
+    schema =  pd.io.json.build_table_schema(df)
 
-        with open(SCHEMA_FILE, "w") as f:
-            json.dump(schema, f, indent=2)
+    with open(SCHEMA_FILE, "w") as f:
+        json.dump(schema, f, indent=2)
 
-        dataset_hash = file_hash(PARQUET_FILE)
+    dataset_hash = file_hash(OUTPUT_FILE)
 
-        metadata = {
-            "rows": len(df),
-            "columns": len(df.columns),
-            "dataset_hash": dataset_hash
-        }
+    metadata = {
+        "rows": len(df),
+        "columns": len(df.columns),
+        "dataset_hash": dataset_hash
+    }
 
-        with open(METADATA_FILE, "w") as f:
-            json.dump(metadata, f, indent=2)
+    with open(METADATA_FILE, "w") as f:
+        json.dump(metadata, f, indent=2)
 
-        mlflow.log_param("dataset_hash", dataset_hash)
+    # mlflow.log_param("dataset_hash", dataset_hash)
+    mlflow.set_tag("component", "make dataset")
 
-        mlflow.log_metric("rows", len(df))
-        mlflow.log_metric("columns", len(df.columns))
-        mlflow.log_metric(
-            "null_count",
-            int(df.isna().sum().sum())
-        )
+    mlflow.log_metric("rows", len(df))
+    mlflow.log_metric("columns", len(df.columns))
+    mlflow.log_metric(
+        "null_count",
+        int(df.isna().sum().sum())
+    )
 
-        mlflow.log_artifact(str(PARQUET_FILE))
-        mlflow.log_artifact(str(SCHEMA_FILE))
-        mlflow.log_artifact(str(METADATA_FILE))
+    mlflow.log_artifact(str(OUTPUT_FILE))
+    mlflow.log_artifact(str(SCHEMA_FILE))
+    mlflow.log_artifact(str(METADATA_FILE))
 
-    print("DATASET CREATED", output_filepath)
+    print("DATASET CREATED", interP)
 
 if __name__ == '__main__':
     log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'

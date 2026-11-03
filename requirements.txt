@@ -10,6 +10,8 @@ python-dotenv
 Sphinx
 coverage
 flake8
+xgboost
+sklearn
 python-dotenv>=0.5.1
 
 
