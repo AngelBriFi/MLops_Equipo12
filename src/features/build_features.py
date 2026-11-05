@@ -93,8 +93,8 @@ def main():
     #get to root project path
     project_dir = Path(__file__).resolve().parents[2]
 
-    # Load config from folder data
-    with open(f'{project_dir}/src/data/config.yaml', "r") as f:
+    # Load config from folder features
+    with open(f'{project_dir}/src/features/config.yaml', "r") as f:
         config = yaml.safe_load(f)
 
     # Interim configuration

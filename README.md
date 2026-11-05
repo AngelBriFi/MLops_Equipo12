@@ -58,10 +58,12 @@ Project Organization
 
 --------
 
-Cada fase del proyecto tiene su archivo config.yaml:
-    -/src/data el archivo config esta pensado en contener la configuracion del paths, nombres de archivos y tipos de archivos para modificacion de los datos, esto incluye /features por el momento.
-    -/src/models: el archivo config contiene la configuracion de ajuste de hiperparametros.
+# Estructura
+
+Cada fase del proyecto tiene su archivo config.yaml
+
+El pipeline completo puede ser ejecutado mediante: mlflow run . <br>
+&ensp;&ensp;-e puede incluir **feature**, **dataset** para recrear pasos independientes
 
 
-El pipeline completo puede ser ejecutado mediante: mlflow run .
 

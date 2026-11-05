@@ -1,0 +1,11 @@
+paths:
+  interim: data/interim
+  processed_data: data/processed
+
+fileNames:
+  interim: interim
+  processed: processed
+
+fileTypes:
+  interim: parquet
+  processed: parquet

@@ -3,3 +3,9 @@ name: Mibici pipeline
 entry_points:
   main:
     command: python run_pipeline.py
+
+  features:
+    command: python ./src/features/build_features.py
+
+  dataset:
+    command: python make_dataset.py
