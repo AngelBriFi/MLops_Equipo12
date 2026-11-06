@@ -9,3 +9,6 @@ entry_points:
 
   dataset:
     command: python make_dataset.py
+
+  training:
+    command: python ./src/models/train_model.py

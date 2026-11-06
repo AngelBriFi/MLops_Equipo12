@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-import click
 import logging
+import numpy as np
 from pathlib import Path
 from dotenv import find_dotenv, load_dotenv
 import pandas as pd
@@ -62,6 +62,9 @@ def ValoresHistoricos(df_init : pd.DataFrame):
     df = df.sort_values(["Origen_Id", "fecha_hora"])
 
     df["lag_1h"] = df.groupby("Origen_Id")["demanda"].shift(1)
+    df["lag_2h"] = df.groupby("Origen_Id")["demanda"].shift(2)
+    df["lag_6h"] = df.groupby("Origen_Id")["demanda"].shift(3)
+    df["lag_12h"] = df.groupby("Origen_Id")["demanda"].shift(12)
     df["lag_24h"] = df.groupby("Origen_Id")["demanda"].shift(24)
     df["lag_7d"] = df.groupby("Origen_Id")["demanda"].shift(24 * 7)
 
@@ -75,13 +78,42 @@ def Features(df_init : pd.DataFrame):
     df = df_init.copy()
     df["fecha_hora"] = pd.to_datetime(df["fecha_hora"])
 
+    # Codificar hora, dia de la semana y mes en formato ciclico para hacer mayor distincion entre transiciones
     df["hora"] = df["fecha_hora"].dt.hour
+    df['hour_sin'] = np.sin(2*np.pi*df["fecha_hora"].dt.hour/24)
+    df['hour_cos'] = np.cos(2*np.pi*df["fecha_hora"].dt.hour/24)
+    df.drop(columns=["hora"],inplace=True)
+    
+
     df["dia_semana"] = df["fecha_hora"].dt.day_of_week
+    df['dow_sin'] = np.sin(2*np.pi*df['dia_semana']/7)
+    df['dow_cos'] = np.cos(2*np.pi*df['dia_semana']/7)
+    df["es_fin_semana"] = (df["dia_semana"] >= 5).astype(int)
+    df.drop(columns=["dia_semana"],inplace=True)
+
     df["mes"] = df["fecha_hora"].dt.month
+    df['mes_sin'] = np.sin(2*np.pi*df["mes"]/12)
+    df['mes_cos'] = np.cos(2*np.pi*df["mes"]/12)
+    df.drop(columns=["mes"],inplace=True)
+
     df["dia_mes"] = df["fecha_hora"].dt.day
-    df["es_fin_semana"] = (
-        df["dia_semana"] >= 5
-    ).astype(int)
+
+    df["rolling_max_6h"] = (df.groupby("Origen_Id")["demanda"].shift(1).rolling(6).max())
+    df["rolling_max_12h"] = (df.groupby("Origen_Id")["demanda"].shift(1).rolling(12).max())
+    df["rolling_max_24h"] = (df.groupby("Origen_Id")["demanda"].shift(1).rolling(24).max())
+
+    df['rolling_max_6h'].fillna(value=0, inplace=True)
+    df['rolling_max_12h'].fillna(value=0, inplace=True)
+    df['rolling_max_24h'].fillna(value=0, inplace=True)
+
+    df['origin_avg'] = (df.groupby('Origen_Id')['demanda'].mean())
+    df['origin_std'] = (df.groupby('Origen_Id')['demanda'].std())
+    df['origin_max'] = (df.groupby('Origen_Id')['demanda'].max())
+
+    df['origin_avg'].fillna(value=0, inplace=True)
+    df['origin_std'].fillna(value=0, inplace=True)
+    df['origin_max'].fillna(value=0, inplace=True)
+
     return df
 
 def main():
