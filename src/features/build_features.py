@@ -82,19 +82,19 @@ def Features(df_init : pd.DataFrame):
     df["hora"] = df["fecha_hora"].dt.hour
     df['hour_sin'] = np.sin(2*np.pi*df["fecha_hora"].dt.hour/24)
     df['hour_cos'] = np.cos(2*np.pi*df["fecha_hora"].dt.hour/24)
-    df.drop(columns=["hora"],inplace=True)
+    df = df.drop(columns=["hora"])
     
 
     df["dia_semana"] = df["fecha_hora"].dt.day_of_week
     df['dow_sin'] = np.sin(2*np.pi*df['dia_semana']/7)
     df['dow_cos'] = np.cos(2*np.pi*df['dia_semana']/7)
     df["es_fin_semana"] = (df["dia_semana"] >= 5).astype(int)
-    df.drop(columns=["dia_semana"],inplace=True)
+    df = df.drop(columns=["dia_semana"])
 
     df["mes"] = df["fecha_hora"].dt.month
     df['mes_sin'] = np.sin(2*np.pi*df["mes"]/12)
     df['mes_cos'] = np.cos(2*np.pi*df["mes"]/12)
-    df.drop(columns=["mes"],inplace=True)
+    df = df.drop(columns=["mes"])
 
     df["dia_mes"] = df["fecha_hora"].dt.day
 
@@ -102,17 +102,17 @@ def Features(df_init : pd.DataFrame):
     df["rolling_max_12h"] = (df.groupby("Origen_Id")["demanda"].shift(1).rolling(12).max())
     df["rolling_max_24h"] = (df.groupby("Origen_Id")["demanda"].shift(1).rolling(24).max())
 
-    df['rolling_max_6h'].fillna(value=0, inplace=True)
-    df['rolling_max_12h'].fillna(value=0, inplace=True)
-    df['rolling_max_24h'].fillna(value=0, inplace=True)
+    df['rolling_max_6h'] = df['rolling_max_6h'].fillna(value=0)
+    df['rolling_max_12h'] = df['rolling_max_12h'].fillna(value=0)
+    df['rolling_max_24h'] = df['rolling_max_24h'].fillna(value=0)
 
     df['origin_avg'] = (df.groupby('Origen_Id')['demanda'].mean())
     df['origin_std'] = (df.groupby('Origen_Id')['demanda'].std())
     df['origin_max'] = (df.groupby('Origen_Id')['demanda'].max())
 
-    df['origin_avg'].fillna(value=0, inplace=True)
-    df['origin_std'].fillna(value=0, inplace=True)
-    df['origin_max'].fillna(value=0, inplace=True)
+    df['origin_avg'] = df['origin_avg'].fillna(value=0)
+    df['origin_std'] = df['origin_std'].fillna(value=0)
+    df['origin_max'] = df['origin_max'].fillna(value=0)
 
     return df
 

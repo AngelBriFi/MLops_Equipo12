@@ -10,7 +10,8 @@ TrainingParameters:
   learning_rate: [0.03, 0.075]
   subsample: [ 0.8, 1.0]
   colsample_bytree: [0.7, 1.0]
-  n_iterations: 10  #Number of cycles per run
+  n_iterations: 5  #Number of cycles per run
+  regresionObjective:  reg:squarederror #reg:squarederror, reg:absoluteerror,reg:pseudohubererror,reg:gamma,reg:tweedie
   scoring: neg_mean_absolute_error #'r2', 'neg_mean_squared_error', 'neg_mean_absolute_error'
   splits: 2 #Ramdom test to fine tune hyperparameters
   trainPerc: 80 #Percentage use for training 0 - 100

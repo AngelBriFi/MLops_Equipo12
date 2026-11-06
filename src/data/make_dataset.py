@@ -52,9 +52,11 @@ def main():
 
     dfs = [pd.read_csv(path, encoding='latin1') for path in dirs if str(path).__contains__('datos_abiertos')]
     df = pd.concat(dfs, ignore_index=True)
-    df.drop(columns=['AÃ±o_de_nacimiento','Año_de_nacimiento','Viaje_Id','Genero','Usuario_Id'], inplace=True)
-    df.drop_duplicates(inplace=True)
-    df.reset_index(drop=True, inplace=True)
+
+    df = df.drop(columns=['AÃ±o_de_nacimiento','Año_de_nacimiento','Viaje_Id','Genero','Usuario_Id'])
+    df = df.drop_duplicates()
+    df = df.reset_index(drop=True)
+
     df['Destino_Id'] = df['Destino_Id'].astype('str')
     df['Origen_Id'] = df['Origen_Id'].astype('str')
     df['Inicio_del_viaje'] = pd.to_datetime(df['Inicio_del_viaje'],format="%Y-%m-%d %H:%M:%S")

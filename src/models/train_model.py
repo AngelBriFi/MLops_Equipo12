@@ -12,7 +12,10 @@ import os
 from pathlib import Path
 import yaml
 import logging
-import mlflow.xgboost
+import mlflow
+from mlflow.models import infer_signature
+import mlflow.sklearn
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 def main():
     #Load data processed
@@ -32,14 +35,15 @@ def main():
     pathProc = project_dir.joinpath(config['paths']['processed_data'])
 
     # Load config from folder data
-    with open(f'{project_dir}\\src\\models\\config.yaml', "r") as f:
+    with open(f'{project_dir}/src/models/config.yaml', "r") as f:
         trainingConfg = yaml.safe_load(f)
 
     # Model training configuration
     trainParam = trainingConfg['TrainingParameters']
+    modelName = trainingConfg['fileNames']['model']
 
     #LOAD DATA
-    df = pd.read_parquet(f'{pathProc}\\{fileNameProc}.parquet')
+    df = pd.read_parquet(f'{pathProc}/{fileNameProc}.parquet')
 
     #CONVERT DATA
     for col in df.select_dtypes(include=["int64"]):
@@ -76,7 +80,7 @@ def main():
     X_test = test.drop(columns=["demanda"])
     y_test = test["demanda"]
 
-    categorical_features = X_train.select_dtypes('object').columns
+    categorical_features = X_train.select_dtypes(include=["object", "string"]).columns
     numeric_features = X_train.select_dtypes('number').columns
 
     preprocessor = ColumnTransformer(transformers=[
@@ -89,9 +93,29 @@ def main():
 
     tscv = TimeSeriesSplit(n_splits=trainParam['splits'])
 
+    try:
+        xgb_model = XGBRegressor(
+            objective = trainParam['regresionObjective'],
+            device="cuda",
+            tree_method="hist"
+        )
+
+        # Test rápido
+        xgb_model.fit(
+            np.array([[0], [1]]),
+            np.array([0, 1])
+        )
+
+        print("GPU detectada")
+        device = "cuda"
+
+    except Exception:
+        print("GPU no disponible, usando CPU")
+        device = "cpu"
+
     pipeline = Pipeline([
         ('preprocess', preprocessor),
-        ('model', XGBRegressor(objective='reg:squarederror', device="cuda"))
+        ('model', XGBRegressor(objective = trainParam['regresionObjective'], device=device, tree_method="hist"))
     ])
 
     param_grid = {
@@ -111,13 +135,46 @@ def main():
         verbose=1
     )
 
-    mlflow.set_tag("Training", "Training process")
-    mlflow.xgboost.autolog()
+    # # START TEST
+    # search.fit(X_train, y_train)
 
-    # START TEST
-    search.fit(X_train, y_train)
+    # # Best model and parameters
+    # best_model = search.best_estimator_
+
+    # # Predictions for signature
+    # predictions = best_model.predict(X_test)
 
 
+    with mlflow.start_run(run_name=modelName, nested=True):
+        search.fit(X_train, y_train)
+
+        best_model = search.best_estimator_
+
+        predictions = best_model.predict(X_test)
+
+        mae = mean_absolute_error(y_test, predictions)
+        rmse = np.sqrt(mean_squared_error(y_test, predictions))
+        r2 = r2_score(y_test, predictions)
+
+        mlflow.log_params(search.best_params_)
+        mlflow.log_metrics({
+            "mae": mae,
+            "rmse": rmse,
+            "r2": r2
+        })
+
+        model_info = mlflow.sklearn.log_model(
+            sk_model=best_model,
+            artifact_path="model",
+            serialization_format="cloudpickle"
+        )
+
+        mlflow.register_model(
+            model_uri=model_info.model_uri,
+            name=modelName
+        )
+
+    # mlflow.log_model_params()
     # estimators = trainParam['n_estimators']
     # depth = trainParam['max_depth']
     # lrate = trainParam['learning_rate']
