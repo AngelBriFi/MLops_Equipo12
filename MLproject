@@ -4,11 +4,11 @@ entry_points:
   main:
     command: python run_pipeline.py
 
-  features:
-    command: python ./src/features/build_features.py
-
   dataset:
-    command: python make_dataset.py
+    command: python -m src.data.make_dataset
+
+  features:
+    command: python -m src.features.build_features
 
   training:
-    command: python ./src/models/train_model.py
+    command: python -m src.models.train_model

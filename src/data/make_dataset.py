@@ -1,127 +1,101 @@
 # -*- coding: utf-8 -*-
-import click
+"""Ingesta y limpieza: CSV mensuales de MiBici -> parquet 'interim'.
+
+Rol principal: Data Engineer.
+"""
+from __future__ import annotations
+
 import logging
 from pathlib import Path
-from dotenv import find_dotenv, load_dotenv
+
+import click
 import pandas as pd
-import os
-from pathlib import Path
-import hashlib
-import json
-import mlflow
-import yaml
+from dotenv import find_dotenv, load_dotenv
 
-# Create hash for experiments ID
-def file_hash(filepath):
-    sha = hashlib.sha256()
+from src.config import load_params, resolve_path
+from src.data.validate_dataset import validate_dataset
+from src.utils.helpers import log_dataset_run
 
-    with open(filepath, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
-            sha.update(chunk)
+logger = logging.getLogger(__name__)
 
-    return sha.hexdigest()
 
-def main():
-    """ Runs data processing scripts to turn raw data from (../raw) into
-        cleaned data ready to be analyzed (saved in ../processed).
+def list_raw_files(raw_dir: Path, pattern: str) -> list[Path]:
+    """Busca recursivamente los CSV de datos abiertos (ordenados)."""
+    files = sorted(p for p in raw_dir.rglob("*.csv") if pattern in p.name)
+    if not files:
+        raise FileNotFoundError(
+            f"No se encontraron CSV con '{pattern}' en {raw_dir}")
+    return files
+
+
+def validate_schema(df: pd.DataFrame, required: list[str], source: str) -> None:
+    """Falla temprano si a un archivo le falta alguna columna requerida."""
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(f"{source}: faltan columnas {missing}")
+
+
+def read_raw_csvs(files: list[Path], keep: list[str], encoding: str) -> pd.DataFrame:
+    """Lee solo las columnas necesarias de cada archivo y las unifica.
+
+    Al leer únicamente `keep` se evita la columna de año de nacimiento, que
+    llegó corrupta en julio y con dos nombres distintos entre archivos.
     """
-    
+    frames = []
+    for f in files:
+        part = pd.read_csv(f, encoding=encoding,
+                           usecols=lambda c: c in keep)
+        validate_schema(part, keep, f.name)
+        frames.append(part[keep])
+    return pd.concat(frames, ignore_index=True)
 
-    logger = logging.getLogger('MAKE DATASET')
-    logger.info('Making interim data set from raw data')
 
-    #get to root project path
-    project_dir = Path(__file__).resolve().parents[2]
+def clean_trips(df: pd.DataFrame) -> pd.DataFrame:
+    """Elimina nulos y duplicados y corrige tipos."""
+    df = df.dropna().drop_duplicates().reset_index(drop=True)
+    for col in ("Origen_Id", "Destino_Id"):
+        df[col] = df[col].astype("int64").astype("str")
+    for col in ("Inicio_del_viaje", "Fin_del_viaje"):
+        df[col] = pd.to_datetime(df[col], format="%Y-%m-%d %H:%M:%S")
+    return df
 
-    # Load config from folder data
-    with open(f'{project_dir}/src/data/config.yaml', "r") as f:
-        config = yaml.safe_load(f)
 
-    fileName = config['fileNames']['interim']
-    fileType = config['fileTypes']['interim']
-    pathRaw = config['paths']['raw_data']
-    pathInterim = config['paths']['interim']
+def build_interim_dataset(params: dict, raw_dir: Path | None = None,
+                          out_dir: Path | None = None) -> Path:
+    """Pipeline completo de ingesta; devuelve la ruta del parquet generado."""
+    data_cfg = params["data"]
+    raw_dir = raw_dir or resolve_path(params["paths"]["raw"])
+    out_dir = out_dir or resolve_path(params["paths"]["interim"])
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    rawP = project_dir.joinpath(pathRaw)
+    files = list_raw_files(raw_dir, data_cfg["raw_file_pattern"])
+    logger.info("Leyendo %d archivos", len(files))
+    df = clean_trips(read_raw_csvs(files, data_cfg["keep_columns"],
+                                   data_cfg["encoding"]))
+    validate_dataset(df)   # reglas de consistencia (nulos, fechas, fin >= inicio)
+    parquet_file = out_dir / data_cfg["interim_file"]
+    df.to_parquet(parquet_file)
+    log_dataset_run(df, parquet_file, params, run_name="dataset-interim")
+    logger.info("Dataset interim: %d filas -> %s", len(df), parquet_file)
+    return parquet_file
 
-    dirs = []
-    for item in os.listdir(rawP):
-        lclPath = Path(rawP).joinpath(item)
-        for f in lclPath.glob('*.csv'):
-            dirs.append(str(f))
 
-    dfs = [pd.read_csv(path, encoding='latin1') for path in dirs if str(path).__contains__('datos_abiertos')]
-    df = pd.concat(dfs, ignore_index=True)
+@click.command()
+@click.option("--params", "params_path", default=None,
+              help="Ruta a params.yaml (opcional).")
+@click.option("--raw-dir", default=None, help="Sobrescribe paths.raw.")
+@click.option("--out-dir", default=None, help="Sobrescribe paths.interim.")
+def main(params_path, raw_dir, out_dir):
+    """CSV crudos (data/raw) -> parquet limpio (data/interim)."""
+    params = load_params(params_path)
+    build_interim_dataset(
+        params,
+        raw_dir=resolve_path(raw_dir) if raw_dir else None,
+        out_dir=resolve_path(out_dir) if out_dir else None)
 
-    df = df.drop(columns=['AÃ±o_de_nacimiento','Año_de_nacimiento','Viaje_Id','Genero','Usuario_Id'])
-    df = df.drop_duplicates()
-    df = df.reset_index(drop=True)
 
-    df['Destino_Id'] = df['Destino_Id'].astype('str')
-    df['Origen_Id'] = df['Origen_Id'].astype('str')
-    df['Inicio_del_viaje'] = pd.to_datetime(df['Inicio_del_viaje'],format="%Y-%m-%d %H:%M:%S")
-    df['Fin_del_viaje'] = pd.to_datetime(df['Fin_del_viaje'],format="%Y-%m-%d %H:%M:%S")
-
-    interP = project_dir.joinpath(pathInterim)
-
-    if not Path(interP).exists():
-        os.mkdir(interP)
-
-    if str(fileType).lower() == 'parquet':
-        OUTPUT_FILE = f"{interP}/{fileName}.parquet"
-        df.to_parquet(OUTPUT_FILE)
-    elif str(fileType).lower() == 'csv':
-        OUTPUT_FILE = f"{interP}/{fileName}.csv"
-        df.to_csv(OUTPUT_FILE)
-    else:
-        raise Exception("Incorrect data type output, check the config yaml in /data")
-    
-    # mlflow.set_experiment("datasetToInterim")
-    # with mlflow.start_run(nested=True):
-    SCHEMA_FILE = Path(f"{interP}/schema.json")
-    METADATA_FILE = Path(f"{interP}/metadata.json")
-
-    schema =  pd.io.json.build_table_schema(df)
-
-    with open(SCHEMA_FILE, "w") as f:
-        json.dump(schema, f, indent=2)
-
-    dataset_hash = file_hash(OUTPUT_FILE)
-
-    metadata = {
-        "rows": len(df),
-        "columns": len(df.columns),
-        "dataset_hash": dataset_hash
-    }
-
-    with open(METADATA_FILE, "w") as f:
-        json.dump(metadata, f, indent=2)
-
-    # mlflow.log_param("dataset_hash", dataset_hash)
-    mlflow.set_tag("component", "make dataset")
-
-    mlflow.log_metric("rows", len(df))
-    mlflow.log_metric("columns", len(df.columns))
-    mlflow.log_metric(
-        "null_count",
-        int(df.isna().sum().sum())
-    )
-
-    mlflow.log_artifact(str(OUTPUT_FILE))
-    mlflow.log_artifact(str(SCHEMA_FILE))
-    mlflow.log_artifact(str(METADATA_FILE))
-
-    print("DATASET CREATED", interP)
-
-if __name__ == '__main__':
-    log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    logging.basicConfig(level=logging.INFO, format=log_fmt)
-
-    # not used in this stub but often useful for finding various files
-    project_dir = Path(__file__).resolve().parents[2]
-
-    # find .env automagically by walking up directories until it's found, then
-    # load up the .env entries as environment variables
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     load_dotenv(find_dotenv())
-
     main()

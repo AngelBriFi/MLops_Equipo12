@@ -1,0 +1,66 @@
+# ==========================================================================
+# Configuración central del proyecto MiBici (Equipo 12).
+# Ningún módulo en src/ define rutas, semillas ni hiperparámetros propios:
+# todo se lee de este archivo (ver src/config.py).
+# ==========================================================================
+seed: 42
+
+paths:
+  raw: data/raw
+  interim: data/interim
+  processed: data/processed
+  models: models
+  figures: reports/figures
+  reports: reports
+
+data:
+  raw_file_pattern: datos_abiertos      # solo se leen CSV cuyo nombre contenga esto
+  encoding: latin1
+  # Columnas que se conservan. Año_de_nacimiento (corrupta en julio), Usuario_Id,
+  # Viaje_Id y Genero no se leen: así el esquema de entrada queda fijado.
+  keep_columns: [Inicio_del_viaje, Fin_del_viaje, Origen_Id, Destino_Id]
+  interim_file: mibici_data.parquet
+
+features:
+  id_column: Origen_Id
+  time_column: fecha_hora
+  target: demanda
+  lags_hours:                           # nombre de la variable: horas de rezago
+    lag_1h: 1
+    lag_2h: 2
+    lag_6h: 6                           # (en la versión previa se calculaba con shift(3))
+    lag_12h: 12
+    lag_24h: 24
+    lag_7d: 168
+  rolling_window_hours: 24
+  rolling_max_hours: [6, 12, 24]        # rolling_max_{w}h por estación (ventana sobre el pasado)
+  cyclical_time: true                   # sin/cos de hora, día de la semana y mes (reemplaza el one-hot)
+  processed_file: mibici_features.parquet
+
+# Las columnas del modelo se derivan de `features` (ver src/models/pipeline.py: model_columns).
+
+split:
+  train_fraction: 0.80                  # corte temporal (no aleatorio)
+
+mlflow:
+  tracking_uri: sqlite:///mlflow.db     # se puede sobreescribir con MLFLOW_TRACKING_URI
+  experiment: mibici-demand-forecast
+  registered_model_prefix: mibici-demand
+  champion_alias: champion
+
+training:
+  cv_splits: 3                          # TimeSeriesSplit
+  search_sample_frac: 0.15              # fracción de train usada SOLO para la búsqueda
+  n_iter: 12                            # candidatos de RandomizedSearchCV
+  scoring: neg_mean_absolute_error
+  n_jobs: -1
+  xgboost:
+    device: auto                        # auto = usa GPU (cuda) si existe, si no CPU
+    tree_method: hist
+  search_space:                         # distribuciones para RandomizedSearchCV
+    n_estimators:     {type: int,       low: 200,  high: 800}
+    max_depth:        {type: int,       low: 3,    high: 10}
+    learning_rate:    {type: loguniform, low: 0.01, high: 0.3}
+    subsample:        {type: uniform,   low: 0.6,  high: 0.4}   # [low, low+high]
+    colsample_bytree: {type: uniform,   low: 0.5,  high: 0.5}
+    objective:        {type: choice,    values: [reg:squarederror, count:poisson]}

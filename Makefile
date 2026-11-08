@@ -1,4 +1,4 @@
-.PHONY: clean data lint requirements sync_data_to_s3 sync_data_from_s3
+.PHONY: clean data features train predict test lint requirements mlflow-ui pipeline sync_data_to_s3 sync_data_from_s3
 
 #################################################################################
 # GLOBALS                                                                       #
@@ -25,9 +25,32 @@ requirements: test_environment
 	$(PYTHON_INTERPRETER) -m pip install -U pip setuptools wheel
 	$(PYTHON_INTERPRETER) -m pip install -r requirements.txt
 
-## Make Dataset
-data: requirements
-	$(PYTHON_INTERPRETER) src/data/make_dataset.py data/raw data/processed
+## Make interim dataset (data/raw -> data/interim)
+data:
+	$(PYTHON_INTERPRETER) -m src.data.make_dataset
+
+## Build features (data/interim -> data/processed)
+features:
+	$(PYTHON_INTERPRETER) -m src.features.build_features
+
+## Train, tune, evaluate and register models in MLflow
+train:
+	$(PYTHON_INTERPRETER) -m src.models.train_model
+
+## Predict with the champion model
+predict:
+	$(PYTHON_INTERPRETER) -m src.models.predict_model
+
+## Run the whole pipeline end to end
+pipeline: data features train
+
+## Run unit tests
+test:
+	$(PYTHON_INTERPRETER) -m pytest
+
+## Open the MLflow UI (same backend as params.yaml)
+mlflow-ui:
+	mlflow ui --backend-store-uri sqlite:///mlflow.db
 
 ## Delete all compiled Python files
 clean:

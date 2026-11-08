@@ -1,214 +1,132 @@
 # -*- coding: utf-8 -*-
+"""Construcción de variables: viajes -> demanda por estación-hora + señales.
+
+Rol principal: Data Scientist.
+"""
+from __future__ import annotations
+
 import logging
+from pathlib import Path
+
+import click
 import numpy as np
-from pathlib import Path
-from dotenv import find_dotenv, load_dotenv
 import pandas as pd
-import os
-from pathlib import Path
-import hashlib
-import json
-import mlflow
-import yaml
+from dotenv import find_dotenv, load_dotenv
 
-def file_hash(filepath):
-    sha = hashlib.sha256()
+from src.config import load_params, resolve_path
+from src.utils.helpers import log_dataset_run
 
-    with open(filepath, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
-            sha.update(chunk)
+logger = logging.getLogger(__name__)
 
-    return sha.hexdigest()
 
-def CrearDemanda(df_init : pd.DataFrame):
-    df = df_init.copy()
+def crear_demanda(trips: pd.DataFrame, id_col: str = "Origen_Id",
+                  time_col: str = "fecha_hora",
+                  target: str = "demanda") -> pd.DataFrame:
+    """Cuenta los viajes que inician en cada estación por hora."""
     demanda = (
-    df.groupby([
-        "Origen_Id",
-        pd.Grouper(key="Inicio_del_viaje", freq="h")
-    ])
-    .size()
-    .reset_index(name="demanda")
+        trips.groupby([id_col, pd.Grouper(key="Inicio_del_viaje", freq="h")])
+        .size().reset_index(name=target)
+        .rename(columns={"Inicio_del_viaje": time_col})
     )
+    return demanda.sort_values([id_col, time_col]).reset_index(drop=True)
 
-    demanda = demanda.rename(columns={"Inicio_del_viaje": "fecha_hora"})
-    return demanda.sort_values(["Origen_Id", "fecha_hora"])
 
-def DemandasCasosCero(df_init : pd.DataFrame):
-    df = df_init.copy()
-    estaciones = df["Origen_Id"].unique()
+def completar_horas_vacias(demanda: pd.DataFrame, id_col: str = "Origen_Id",
+                           time_col: str = "fecha_hora") -> pd.DataFrame:
+    """Agrega las horas sin viajes con demanda 0 (malla completa estación x hora)."""
+    horas = pd.date_range(demanda[time_col].min().floor("h"),
+                          demanda[time_col].max().floor("h"), freq="h")
+    malla = pd.MultiIndex.from_product(
+        [demanda[id_col].unique(), horas], names=[id_col, time_col])
+    return (demanda.set_index([id_col, time_col])
+            .reindex(malla, fill_value=0).reset_index())
 
-    rango_fechas = pd.date_range(
-        start=df["fecha_hora"].min().floor("h"),
-        end=df["fecha_hora"].max().floor("h"),
-        freq="h"
-    )
 
-    indice_completo = pd.MultiIndex.from_product(
-        [estaciones, rango_fechas],
-        names=["Origen_Id", "fecha_hora"]
-    )
+def agregar_historicos(demanda: pd.DataFrame, lags: dict[str, int],
+                       window: int, rolling_max_hours: list[int] | None = None,
+                       id_col: str = "Origen_Id", time_col: str = "fecha_hora",
+                       target: str = "demanda") -> pd.DataFrame:
+    """Rezagos, media móvil y máximos móviles por estación. Solo usa el pasado.
 
-    demanda = (
-        df.set_index(["Origen_Id", "fecha_hora"])
-        .reindex(indice_completo, fill_value=0) # A los campos vacios entre filas se rellena con valor 0 en demanda
-        .reset_index()
-    )
+    Las ventanas móviles se calculan *dentro de cada estación* (groupby +
+    transform), de modo que una estación nunca ve datos de la anterior.
+    """
+    df = demanda.sort_values([id_col, time_col]).copy()
+    grouped = df.groupby(id_col)[target]
+    for name, hours in lags.items():
+        df[name] = grouped.shift(hours)
+    df[f"media_{window}h"] = grouped.transform(
+        lambda s: s.shift(1).rolling(window).mean())
+    for w in rolling_max_hours or []:
+        df[f"rolling_max_{w}h"] = grouped.transform(
+            lambda s, w=w: s.shift(1).rolling(w, min_periods=1).max())
+    return df.dropna().reset_index(drop=True)
 
-    return demanda
 
-def ValoresHistoricos(df_init : pd.DataFrame):
-    df = df_init.copy()
-    df = df.sort_values(["Origen_Id", "fecha_hora"])
+def agregar_calendario(df: pd.DataFrame, time_col: str = "fecha_hora",
+                       cyclical: bool = False) -> pd.DataFrame:
+    """Hora, día de la semana (lunes=0), mes y fin de semana.
 
-    df["lag_1h"] = df.groupby("Origen_Id")["demanda"].shift(1)
-    df["lag_2h"] = df.groupby("Origen_Id")["demanda"].shift(2)
-    df["lag_6h"] = df.groupby("Origen_Id")["demanda"].shift(3)
-    df["lag_12h"] = df.groupby("Origen_Id")["demanda"].shift(12)
-    df["lag_24h"] = df.groupby("Origen_Id")["demanda"].shift(24)
-    df["lag_7d"] = df.groupby("Origen_Id")["demanda"].shift(24 * 7)
-
-    df["media_24h"] = (
-        df.groupby("Origen_Id")["demanda"]
-        .transform(lambda x: x.shift(1).rolling(24).mean())
-    )
-    return df.dropna().copy()
-
-def Features(df_init : pd.DataFrame):
-    df = df_init.copy()
-    df["fecha_hora"] = pd.to_datetime(df["fecha_hora"])
-
-    # Codificar hora, dia de la semana y mes en formato ciclico para hacer mayor distincion entre transiciones
-    df["hora"] = df["fecha_hora"].dt.hour
-    df['hour_sin'] = np.sin(2*np.pi*df["fecha_hora"].dt.hour/24)
-    df['hour_cos'] = np.cos(2*np.pi*df["fecha_hora"].dt.hour/24)
-    df = df.drop(columns=["hora"])
-    
-
-    df["dia_semana"] = df["fecha_hora"].dt.day_of_week
-    df['dow_sin'] = np.sin(2*np.pi*df['dia_semana']/7)
-    df['dow_cos'] = np.cos(2*np.pi*df['dia_semana']/7)
+    Con `cyclical=True` agrega además seno/coseno de hora, día y mes, para que
+    el modelo vea que las 23:00 y las 00:00 (o diciembre y enero) son vecinas.
+    """
+    df = df.copy()
+    df[time_col] = pd.to_datetime(df[time_col])
+    df["hora"] = df[time_col].dt.hour
+    df["dia_semana"] = df[time_col].dt.day_of_week
+    df["mes"] = df[time_col].dt.month
     df["es_fin_semana"] = (df["dia_semana"] >= 5).astype(int)
-    df = df.drop(columns=["dia_semana"])
-
-    df["mes"] = df["fecha_hora"].dt.month
-    df['mes_sin'] = np.sin(2*np.pi*df["mes"]/12)
-    df['mes_cos'] = np.cos(2*np.pi*df["mes"]/12)
-    df = df.drop(columns=["mes"])
-
-    df["dia_mes"] = df["fecha_hora"].dt.day
-
-    df["rolling_max_6h"] = (df.groupby("Origen_Id")["demanda"].shift(1).rolling(6).max())
-    df["rolling_max_12h"] = (df.groupby("Origen_Id")["demanda"].shift(1).rolling(12).max())
-    df["rolling_max_24h"] = (df.groupby("Origen_Id")["demanda"].shift(1).rolling(24).max())
-
-    df['rolling_max_6h'] = df['rolling_max_6h'].fillna(value=0)
-    df['rolling_max_12h'] = df['rolling_max_12h'].fillna(value=0)
-    df['rolling_max_24h'] = df['rolling_max_24h'].fillna(value=0)
-
-    df['origin_avg'] = (df.groupby('Origen_Id')['demanda'].mean())
-    df['origin_std'] = (df.groupby('Origen_Id')['demanda'].std())
-    df['origin_max'] = (df.groupby('Origen_Id')['demanda'].max())
-
-    df['origin_avg'] = df['origin_avg'].fillna(value=0)
-    df['origin_std'] = df['origin_std'].fillna(value=0)
-    df['origin_max'] = df['origin_max'].fillna(value=0)
-
+    if cyclical:
+        for col, period, short in (("hora", 24, "hour"), ("dia_semana", 7, "dow"),
+                                   ("mes", 12, "mes")):
+            angle = 2 * np.pi * df[col] / period
+            df[f"{short}_sin"] = np.sin(angle)
+            df[f"{short}_cos"] = np.cos(angle)
     return df
 
-def main():
-    """ Runs data processing script to create the features from interim data
-    """
-    logger = logging.getLogger('BUILD FEATURES')
-    logger.info('Making final data set from interim data')
 
-    #get to root project path
-    project_dir = Path(__file__).resolve().parents[2]
+def build_feature_table(trips: pd.DataFrame, params: dict) -> pd.DataFrame:
+    """Aplica los pasos en orden usando la configuración central."""
+    f = params["features"]
+    demanda = crear_demanda(trips, f["id_column"], f["time_column"], f["target"])
+    demanda = completar_horas_vacias(demanda, f["id_column"], f["time_column"])
+    demanda = agregar_historicos(demanda, f["lags_hours"],
+                                 f["rolling_window_hours"],
+                                 f.get("rolling_max_hours", []), f["id_column"],
+                                 f["time_column"], f["target"])
+    return agregar_calendario(demanda, f["time_column"], f.get("cyclical_time", False))
 
-    # Load config from folder features
-    with open(f'{project_dir}/src/features/config.yaml', "r") as f:
-        config = yaml.safe_load(f)
 
-    # Interim configuration
-    fileNameInt = config['fileNames']['interim']
-    fileTypeInt = config['fileTypes']['interim']
-    pathInter = project_dir.joinpath(config['paths']['interim'])
+def build_features_dataset(params: dict, in_file: Path | None = None,
+                           out_dir: Path | None = None) -> Path:
+    in_file = in_file or (resolve_path(params["paths"]["interim"])
+                          / params["data"]["interim_file"])
+    out_dir = out_dir or resolve_path(params["paths"]["processed"])
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Processed configuration
-    fileNameProc = config['fileNames']['processed']
-    fileTypeProc = config['fileTypes']['processed']
-    pathProc = project_dir.joinpath(config['paths']['processed_data'])
+    features = build_feature_table(pd.read_parquet(in_file), params)
+    parquet_file = out_dir / params["features"]["processed_file"]
+    features.to_parquet(parquet_file)
+    log_dataset_run(features, parquet_file, params, run_name="dataset-features")
+    logger.info("Features: %d filas -> %s", len(features), parquet_file)
+    return parquet_file
 
-    if not pathProc.exists():
-        os.mkdir(pathProc)
 
-    df = pd.read_parquet(f'{pathInter}/{fileNameInt}.{fileTypeInt}')
+@click.command()
+@click.option("--params", "params_path", default=None)
+@click.option("--in-file", default=None, help="Sobrescribe interim parquet.")
+@click.option("--out-dir", default=None, help="Sobrescribe paths.processed.")
+def main(params_path, in_file, out_dir):
+    """Parquet limpio (data/interim) -> tabla de features (data/processed)."""
+    params = load_params(params_path)
+    build_features_dataset(
+        params,
+        in_file=resolve_path(in_file) if in_file else None,
+        out_dir=resolve_path(out_dir) if out_dir else None)
 
-    # PROCESAMIENTO
-    # 1- Creacion de dataframe demanda
-    demandaDF = CrearDemanda(df)
-    del df
 
-    # 2- Rellenar casos eliminados con demanda a valor 0
-    demandaDF_2 = DemandasCasosCero(demandaDF)
-    del demandaDF
-
-    # 3- Crear los valores historicos por hora, dia y semana
-    demandaDF_3 = ValoresHistoricos(demandaDF_2)
-    del demandaDF_2
-
-    # 4- Creacion de caracteristicas 
-    demandaDF = Features(demandaDF_3)
-
-    PARQUET_FILE = f"{pathProc}/{fileNameProc}.parquet"
-    demandaDF.to_parquet(PARQUET_FILE)
-    
-    # mlflow.set_experiment("datasetToProcessed")
-    # with mlflow.start_run(nested=True):
-    SCHEMA_FILE = Path(f"{pathProc}/schema.json")
-    METADATA_FILE = Path(f"{pathProc}/metadata.json")
-
-    schema =  pd.io.json.build_table_schema(demandaDF)
-
-    with open(SCHEMA_FILE, "w") as f:
-        json.dump(schema, f, indent=2)
-
-    dataset_hash = file_hash(PARQUET_FILE)
-
-    metadata = {
-        "rows": len(demandaDF),
-        "columns": len(demandaDF.columns),
-        "dataset_hash": dataset_hash
-    }
-
-    with open(METADATA_FILE, "w") as f:
-        json.dump(metadata, f, indent=2)
-
-    # mlflow.log_param("dataset_hash", dataset_hash)
-    mlflow.set_tag("component", "make features")
-
-    mlflow.log_metric("rows", len(demandaDF))
-    mlflow.log_metric("columns", len(demandaDF.columns))
-    mlflow.log_metric(
-        "null_count",
-        int(demandaDF.isna().sum().sum())
-    )
-
-    mlflow.log_artifact(str(PARQUET_FILE))
-    mlflow.log_artifact(str(SCHEMA_FILE))
-    mlflow.log_artifact(str(METADATA_FILE))
-
-    print("FEATURES CREATED", pathProc)
-
-if __name__ == '__main__':
-    log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    logging.basicConfig(level=logging.INFO, format=log_fmt)
-
-    # not used in this stub but often useful for finding various files
-    project_dir = Path(__file__).resolve().parents[2]
-
-    # find .env automagically by walking up directories until it's found, then
-    # load up the .env entries as environment variables
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     load_dotenv(find_dotenv())
-
     main()

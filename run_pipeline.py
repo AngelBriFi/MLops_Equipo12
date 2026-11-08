@@ -1,11 +1,15 @@
-import subprocess
+"""Ejecuta el flujo completo: datos -> features -> entrenamiento.
 
-# run_pipeline
+Equivale a `make pipeline` y es el entry point `main` de MLproject
+(`mlflow run .`). Cada etapa se invoca como módulo para que `src` sea importable.
+"""
+import subprocess
+import sys
+
 steps = [
-    ["python", "src/data/make_dataset.py"],
-    ["python", "src/features/build_features.py"],
-    ["python", "src/models/train_model.py"],
-    # ["python", "src/models/evaluate.py"]
+    [sys.executable, "-m", "src.data.make_dataset"],
+    [sys.executable, "-m", "src.features.build_features"],
+    [sys.executable, "-m", "src.models.train_model"],
 ]
 
 for step in steps:
