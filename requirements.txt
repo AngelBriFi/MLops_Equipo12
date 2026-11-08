@@ -1,19 +1,30 @@
-# local package
+# paquete local (hace importable `src`)
 -e .
 
-# external requirements
+# datos y modelado
+pandas>=2.2
+numpy
+pyarrow
+scikit-learn>=1.4
+xgboost>=2.0
+scipy
+pyyaml
+joblib
+cloudpickle
+
+# seguimiento de experimentos y registro de modelos
+mlflow>=3.0
+sqlalchemy
+alembic
+
+# utilidades
 click
-pandas
-ipykernel
-mlflow
 python-dotenv
-Sphinx
-coverage
+matplotlib
+ipykernel
+
+# calidad
+pytest
 flake8
-xgboost
-scikit-learn
-python-dotenv>=0.5.1
-
-
-# backwards compatibility
-pathlib2
+coverage
+Sphinx
