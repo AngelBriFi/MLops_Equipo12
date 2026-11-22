@@ -101,3 +101,27 @@ Configurables en `features` de `params.yaml` (las columnas del modelo se derivan
 --------
 
 <p><small>Project based on the <a target="_blank" href="https://drivendata.github.io/cookiecutter-data-science/">cookiecutter data science project template</a>. #cookiecutterdatascience</small></p>
+
+
+## Servicio de predicción (FastAPI)
+
+El modelo registrado con alias `champion` se expone con FastAPI. Requiere haber entrenado antes (`make train`) para que existan `mlflow.db` y `mlruns`.
+
+```bash
+uvicorn service.api.main:app --host 0.0.0.0 --port 8000
+```
+
+- `GET /health`: estado del servicio y ruta del modelo.
+- `POST /predict`: recibe las variables del modelo y devuelve `{"predictions": [demanda_estimada]}`.
+- Documentación interactiva: http://localhost:8000/docs
+- Modelo: `models:/mibici-demand-xgboost@champion` (definido en `params.yaml`).
+- Ejemplo de petición: `notebooks/05-Prediction_Tests.ipynb`.
+
+## Contenedor (Docker)
+
+```bash
+docker build -t ml-service:latest .
+docker run -p 8000:8000 ml-service:latest
+```
+
+El `Dockerfile` copia `mlflow.db` y `mlruns`, por lo que la imagen se construye en una máquina que ya entrenó el modelo.
