@@ -125,3 +125,14 @@ docker run -p 8000:8000 ml-service:latest
 ```
 
 El `Dockerfile` copia `mlflow.db` y `mlruns`, por lo que la imagen se construye en una máquina que ya entrenó el modelo.
+
+## Registro del modelo 
+Los modelos se almacenan y versionan mediante MLflow Model Registry.
+
+| Campo | Valor | 
+|---------|---------| 
+| Modelo | `mibici-demand-xgboost` |
+| Versión actual | `11` |
+| Alias producción | `champion` |
+| URI versión | `models:/mibici-demand-xgboost/11` | 
+| URI producción | `models:/mibici-demand-xgboost@champion` |
