@@ -1,7 +1,11 @@
-"""Simulación y detección de Data Drift para el proyecto MiBici."""
+
+"""Simulación, detección y evaluación de Data Drift para MiBici."""
 
 import pandas as pd
 from scipy.stats import ks_2samp
+
+from src.models.evaluate import regression_metrics
+from src.models.pipeline import feature_columns
 
 
 def simular_drift_demanda(
@@ -57,8 +61,6 @@ def detectar_drift(
     resultados = []
 
     for columna in columnas:
-
-        # Eliminar valores faltantes
         original = datos_originales[columna].dropna()
         alterado = datos_alterados[columna].dropna()
 
@@ -67,10 +69,9 @@ def detectar_drift(
                 f"No hay suficientes datos para evaluar: {columna}"
             )
 
-        # Prueba Kolmogorov-Smirnov
         estadistico, p_valor = ks_2samp(
             original,
-            alterado
+            alterado,
         )
 
         resultados.append({
@@ -81,3 +82,53 @@ def detectar_drift(
         })
 
     return pd.DataFrame(resultados)
+
+
+def evaluar_impacto_drift(
+    modelo,
+    datos_originales: pd.DataFrame,
+    datos_alterados: pd.DataFrame,
+    params: dict,
+) -> pd.DataFrame:
+    """Compara el desempeño del modelo antes y después del drift."""
+
+    columnas = feature_columns(params)
+    objetivo = params["features"]["target"]
+
+    if len(datos_originales) != len(datos_alterados):
+        raise ValueError(
+            "Los conjuntos deben tener el mismo tamaño."
+        )
+
+    # Generar predicciones con el mismo modelo
+    pred_originales = modelo.predict(
+        datos_originales[columnas]
+    )
+
+    pred_alteradas = modelo.predict(
+        datos_alterados[columnas]
+    )
+
+    # Calcular métricas utilizando la demanda observada
+    metricas_originales = regression_metrics(
+        datos_originales[objetivo],
+        pred_originales,
+    )
+
+    metricas_alteradas = regression_metrics(
+        datos_alterados[objetivo],
+        pred_alteradas,
+    )
+
+    # Comparar resultados
+    return pd.DataFrame([
+        {
+            "escenario": "Sin drift",
+            **metricas_originales,
+        },
+        {
+            "escenario": "Con drift",
+            **metricas_alteradas,
+        },
+    ])
+
