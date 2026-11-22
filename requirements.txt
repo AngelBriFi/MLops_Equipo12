@@ -1,5 +1,5 @@
 # paquete local (hace importable `src`)
--e .
+#-e .
 
 # datos y modelado
 pandas>=2.2

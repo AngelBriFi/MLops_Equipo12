@@ -44,7 +44,7 @@ split:
 
 mlflow:
   tracking_uri: sqlite:///mlflow.db     # se puede sobreescribir con MLFLOW_TRACKING_URI
-  experiment: mibici-demand-forecast
+  experiment: mibici-demand-forecast-Docker
   registered_model_prefix: mibici-demand
   uri: "models:/mibici-demand-xgboost@champion"
   champion_alias: champion
@@ -54,14 +54,14 @@ training:
   search_sample_frac: 0.15              # fracción de train usada SOLO para la búsqueda
   n_iter: 1                            # candidatos de RandomizedSearchCV
   scoring: neg_mean_absolute_error
-  n_jobs: -1
+  n_jobs: 4
   xgboost:
     device: auto                        # auto = usa GPU (cuda) si existe, si no CPU
     tree_method: hist
   search_space:                         # distribuciones para RandomizedSearchCV
-    n_estimators:     {type: int,       low: 1500,  high: 2500}
-    max_depth:        {type: int,       low: 3,    high: 10}
-    learning_rate:    {type: loguniform, low: 0.01, high: 0.3}
+    n_estimators:     {type: int,       low: 500,  high: 1000}
+    max_depth:        {type: int,       low: 5,    high: 10}
+    learning_rate:    {type: loguniform, low: 0.01, high: 0.5}
     subsample:        {type: uniform,   low: 0.6,  high: 0.4}   # [low, low+high]
     colsample_bytree: {type: uniform,   low: 0.5,  high: 0.5}
     objective:        {type: choice,    values: [reg:squarederror, count:poisson]}

@@ -20,13 +20,18 @@ venv/
 env/
 
 # Datos: se excluyen del control de versiones (se conservan solo los .gitkeep)
-/data/raw/*
-/data/interim/*
-/data/processed/*
-/data/external/*
+/data/raw/**
+/data/interim/**
+/data/processed/**
+/data/external/**
 !/data/*/.gitkeep
+!/data/raw/.gitkeep
+!/data/interim/.gitkeep
+!/data/processed/.gitkeep
+!/data/external/.gitkeep
 
 # Artefactos de MLflow y modelos locales
+/notebooks/mlruns
 /mlruns/
 /mlartifacts/
 mlflow.db

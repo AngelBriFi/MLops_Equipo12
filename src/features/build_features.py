@@ -104,6 +104,8 @@ def build_features_dataset(params: dict, in_file: Path | None = None,
     out_dir = out_dir or resolve_path(params["paths"]["processed"])
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    print(in_file)
+    
     features = build_feature_table(pd.read_parquet(in_file), params)
     parquet_file = out_dir / params["features"]["processed_file"]
     features.to_parquet(parquet_file)

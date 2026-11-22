@@ -48,7 +48,6 @@ def main(params_path, input_file, output_file, model_uri):
     preds.to_parquet(out)
     logging.getLogger(__name__).info("%d predicciones -> %s", len(preds), out)
 
-
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     load_dotenv(find_dotenv())

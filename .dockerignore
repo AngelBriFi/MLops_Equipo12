@@ -1,0 +1,42 @@
+# Virtual environments
+.venv
+venv
+
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+
+# Git
+.git
+.gitignore
+
+# MLflow
+# mlruns
+
+# Pytest
+.pytest_cache
+
+# Jupyter
+*.ipynb
+.ipynb_checkpoints
+
+# VSCode
+.vscode
+
+# Logs
+*.log
+
+# Data
+data/raw
+data/interim
+data/processed
+
+# Linux temp
+*.swp
+
+# Parquets
+*.parquet
+
+# Folders
+notebooks

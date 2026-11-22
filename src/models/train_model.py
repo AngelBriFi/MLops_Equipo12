@@ -77,17 +77,6 @@ def search_subsample(train: pd.DataFrame, params: dict) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------- modelos ---
-def evaluate_baselines(test: pd.DataFrame, params: dict) -> dict[str, dict]:
-    """Pronósticos 'ingenuos': no se entrenan, usan columnas ya calculadas."""
-    target = params["features"]["target"]
-    window = params["features"]["rolling_window_hours"]
-    out = {}
-    for name, col in {"baseline_lag_24h": "lag_24h",
-                      "baseline_lag_7d": "lag_7d",
-                      f"baseline_media_{window}h": f"media_{window}h"}.items():
-        out[name] = regression_metrics(test[target], test[col])
-    return out
-
 
 def tune_xgboost(X, y, params: dict) -> RandomizedSearchCV:
     """RandomizedSearchCV con validación cruzada temporal (refit=False)."""
@@ -145,120 +134,268 @@ def fit_log_register(name: str, pipe, train, test, feats, params, cv_mae,
     return {"pipe": pipe, "pred": pred, "metrics": metrics, "run_id": run.info.run_id,
             "registered_model": reg_name, "version": version}
 
+def get_current_champion(params):
+    try:
+        client = MlflowClient()
+
+        model_name = (f"{params['mlflow']['registered_model_prefix']}-xgboost")
+
+        return client.get_model_version_by_alias(
+            model_name,
+            params["mlflow"]["champion_alias"],
+        )
+    except:
+        return None
+
+def evaluate_current_champion(champion,params,test,feats,):
+    target = params["features"]["target"]
+
+    model_uri = ( f"models:/{champion.name}/{champion.version}")
+
+    model = mlflow.pyfunc.load_model(model_uri)
+
+    pred = model.predict(test[feats])
+
+    return {
+        "pred": pred,
+        "metrics": regression_metrics(
+            test[target],
+            pred,
+        )}
 
 # ------------------------------------------------------------ orquestador ---
-def run_training(params: dict, models: tuple[str, ...] = MODEL_NAMES,
-                 features_file: Path | None = None) -> dict:
-    p_id, p_time, target = (params["features"][k] for k in
-                            ("id_column", "time_column", "target"))
-    features_file = features_file or (resolve_path(params["paths"]["processed"])
-                                      / params["features"]["processed_file"])
-    figures_dir, models_dir, reports_dir = (
-        resolve_path(params["paths"][k]) for k in ("figures", "models", "reports"))
+def run_training(params: dict,features_file: Path | None = None) -> dict:
+
+    p_id, p_time, target = (params["features"][k] for k in ("id_column", "time_column", "target"))
+
+    features_file = (features_file or resolve_path(params["paths"]["processed"]) / params["features"]["processed_file"])
+
+    figures_dir, models_dir, reports_dir = (resolve_path(params["paths"][k]) for k in ("figures", "models", "reports"))
+
     for d in (figures_dir, models_dir, reports_dir):
         d.mkdir(parents=True, exist_ok=True)
 
-    df = downcast(pd.read_parquet(features_file), keep=(target,))
+    df = downcast(
+        pd.read_parquet(features_file),
+        keep=(target,),
+    )
+
     feats = feature_columns(params)
-    train, test, cutoff = temporal_split(df, p_time, params["split"]["train_fraction"])
+
+    train, test, cutoff = temporal_split(
+        df,
+        p_time,
+        params["split"]["train_fraction"],
+    )
+
     del df
     gc.collect()
+
     sub = search_subsample(train, params)
-    logger.info("Train %d | Test %d | corte %s | submuestra búsqueda %d",
-                len(train), len(test), cutoff, len(sub))
 
-    tiers = station_volume_tiers(train, p_id, target)
+    logger.info(
+        "Train %d | Test %d | corte %s | submuestra búsqueda %d",
+        len(train),
+        len(test),
+        cutoff,
+        len(sub),
+    )
+
+    tiers = station_volume_tiers(
+        train,
+        p_id,
+        target,
+    )
+
     test_tier = test[p_id].map(tiers)
+
     setup_mlflow(params)
+
     tcfg = params["training"]
-    results, preds, fitted = [], {}, {}
 
-    with tracked_run("model-comparison") as parent:
-        mlflow.set_tags({"git_commit": git_commit(), "features_file": str(features_file)})
-        mlflow.log_params({"seed": params["seed"],
-                           "train_fraction": params["split"]["train_fraction"],
-                           "cutoff": str(cutoff), "n_train": len(train), "n_test": len(test),
-                           "cv_splits": tcfg["cv_splits"], "n_iter": tcfg["n_iter"],
-                           "search_sample_frac": tcfg["search_sample_frac"]})
-        mlflow.log_artifact(str(resolve_path("params.yaml")))
+    with tracked_run("xgboost-training") as parent:
 
-        # 1) baselines (sin entrenamiento)
-        for name, m in evaluate_baselines(test, params).items():
-            with mlflow.start_run(run_name=name, nested=True):
-                mlflow.log_param("model", name)
-                mlflow.log_metrics({f"test_{k}": v for k, v in m.items()})
-            results.append({"model": name, **m})
-        base_mae = min(r["mae"] for r in results)
-        base_rmse = min(r["rmse"] for r in results)
+        mlflow.set_tags(
+            {
+                "git_commit": git_commit(),
+                "features_file": str(features_file),
+            }
+        )
 
-        # 2) regresión lineal
-        if "linear" in models:
-            pipe = build_pipeline("linear", params)
-            cv = -cross_val_score(pipe, sub[feats], sub[target],
-                                  cv=TimeSeriesSplit(n_splits=tcfg["cv_splits"]),
-                                  scoring=tcfg["scoring"]).mean()
-            fitted["linear"] = fit_log_register("linear", pipe, train, test, feats,
-                                                params, float(cv), tiers)
-        # 3) XGBoost
-        best_params = {}
-        if "xgboost" in models:
-            search = tune_xgboost(sub[feats], sub[target], params)
-            log_search_candidates(search)
-            best_params = {k.replace("model__", ""): (v.item() if hasattr(v, "item") else v)
-                           for k, v in search.best_params_.items()}
-            pipe = build_pipeline("xgboost", params)
-            pipe.set_params(**{f"model__{k}": v for k, v in best_params.items()})
-            fitted["xgboost"] = fit_log_register(
-                "xgboost", pipe, train, test, feats, params,
-                float(-search.best_score_), tiers, extra_params=best_params)
+        mlflow.log_params(
+            {
+                "seed": params["seed"],
+                "train_fraction": params["split"]["train_fraction"],
+                "cutoff": str(cutoff),
+                "n_train": len(train),
+                "n_test": len(test),
+                "cv_splits": tcfg["cv_splits"],
+                "n_iter": tcfg["n_iter"],
+                "search_sample_frac": tcfg["search_sample_frac"],
+            }
+        )
 
-        # 4) resultados, champion y artefactos
-        breakdowns_mes, breakdowns_vol = {}, {}
-        for name, f in fitted.items():
-            preds[name] = f["pred"]
-            m = f["metrics"]
-            results.append({"model": name, "mae": m["mae"], "rmse": m["rmse"],
-                            "r2": m["r2"], "cv_mae": m["cv_mae"]})
-            breakdowns_mes[name] = error_breakdown(test, f["pred"], test["mes"], target)
-            breakdowns_vol[name] = error_breakdown(test, f["pred"], test_tier, target)
-        res_df = pd.DataFrame(results)
-        res_df["mejora_mae_vs_baseline_pct"] = res_df["mae"].map(
-            lambda v: improvement_vs_baseline(v, base_mae))
-        res_df["mejora_rmse_vs_baseline_pct"] = res_df["rmse"].map(
-            lambda v: improvement_vs_baseline(v, base_rmse))
+        mlflow.log_artifact( str(resolve_path("params.yaml"))        )
 
-        champion = min(fitted, key=lambda n: fitted[n]["metrics"]["cv_mae"])
+        # ====================================================
+        # Entrenamiento XGBoost
+        # ====================================================
+
+        search = tune_xgboost( sub[feats],
+            sub[target],
+            params,
+        )
+
+        log_search_candidates(search)
+
+        best_params = {
+            k.replace("model__", ""):
+            v.item() if hasattr(v, "item") else v
+            for k, v in search.best_params_.items()
+        }
+
+        pipe = build_pipeline(
+            "xgboost",
+            params,
+        )
+
+        pipe.set_params(
+            **{
+                f"model__{k}": v
+                for k, v in best_params.items()
+            }
+        )
+
+        candidate = fit_log_register(
+            "xgboost",
+            pipe,
+            train,
+            test,
+            feats,
+            params,
+            float(-search.best_score_),
+            tiers,
+            extra_params=best_params,
+        )
+
         client = MlflowClient()
-        if fitted[champion]["version"] is not None:
+
+        # ====================================================
+        # Comparación contra champion actual
+        # ====================================================
+
+        current_champion = get_current_champion(params)
+        candidate_mae = candidate["metrics"]["mae"]
+
+        if current_champion is None:
+            champion_mae = None
+            promoted = True
+        else:
+            try:
+                champion_eval = evaluate_current_champion(
+                    current_champion,
+                    params,
+                    test,
+                    feats,
+                )
+
+                champion_mae = (champion_eval["metrics"]["mae"])
+
+                promoted = (candidate_mae < champion_mae)
+            except:
+                champion_mae = None
+                promoted = True
+
+        # ====================================================
+        # Promoción
+        # ====================================================
+
+        if promoted:
             client.set_registered_model_alias(
-                fitted[champion]["registered_model"],
-                params["mlflow"]["champion_alias"], str(fitted[champion]["version"]))
-        joblib.dump(fitted[champion]["pipe"], models_dir / "champion.joblib")
-        mlflow.set_tag("champion", champion)
+                candidate["registered_model"],
+                params["mlflow"]["champion_alias"],
+                str(candidate["version"]),
+            )
+            joblib.dump(candidate["pipe"],models_dir / "champion.joblib")
 
-        res_df.to_csv(reports_dir / "model_comparison.csv", index=False)
-        summary = {"champion": champion, "cutoff": str(cutoff), "best_xgboost_params": best_params,
-                   "results": res_df.to_dict(orient="records")}
-        (reports_dir / "metrics.json").write_text(json.dumps(summary, indent=2, default=str))
+        # ====================================================
+        # Logging MLOps
+        # ====================================================
 
-        if fitted:
-            figs = [plot_model_comparison(res_df, figures_dir / "model_comparison.png"),
-                    plot_breakdown(breakdowns_mes, "MAE por mes (prueba)",
-                                   figures_dir / "mae_por_mes.png"),
-                    plot_breakdown(breakdowns_vol, "MAE por nivel de volumen",
-                                   figures_dir / "mae_por_volumen.png")]
-            top_station = train.groupby(p_id)[target].mean().idxmax()
-            figs.append(plot_pred_vs_actual(test, preds, top_station, p_id, p_time, target,
-                                            figures_dir / "pred_vs_real.png"))
-            for fig in figs:
-                mlflow.log_artifact(str(fig))
-            for tag, bd in (("mes", breakdowns_mes), ("volumen", breakdowns_vol)):
-                for name, d in bd.items():
-                    d.to_csv(reports_dir / f"error_{tag}_{name}.csv", index=False)
-        mlflow.log_artifact(str(reports_dir / "model_comparison.csv"))
+        mlflow.log_metric("candidate_mae",candidate_mae)
+
+        if champion_mae is not None:
+            mlflow.log_metric("champion_mae",champion_mae)
+            mlflow.log_metric("mae_delta",champion_mae - candidate_mae)
+
+        mlflow.set_tag("promoted_to_champion",promoted)
+
+        if current_champion:
+            mlflow.set_tag("compared_against_version",current_champion.version)
+
+        # ====================================================
+        # Breakdowns
+        # ====================================================
+
+        breakdown_mes = error_breakdown(test,candidate["pred"],test["mes"],target)
+
+        breakdown_vol = error_breakdown(test,candidate["pred"],test_tier,target)
+
+        res_df = pd.DataFrame(
+            [
+                {
+                    "model": "xgboost",
+                    "mae": candidate["metrics"]["mae"],
+                    "rmse": candidate["metrics"]["rmse"],
+                    "r2": candidate["metrics"]["r2"],
+                    "cv_mae": candidate["metrics"]["cv_mae"],
+                }
+            ]
+        )
+
+        fig1 = plot_breakdown(
+            {"xgboost": breakdown_mes},
+            "MAE por mes (prueba)",
+            figures_dir / "mae_por_mes.png",
+        )
+
+        fig2 = plot_breakdown(
+            {"xgboost": breakdown_vol},
+            "MAE por nivel de volumen",
+            figures_dir / "mae_por_volumen.png",
+        )
+
+        top_station = (train.groupby(p_id)[target].mean().idxmax() )
+
+        fig3 = plot_pred_vs_actual(
+            test,
+            {"xgboost": candidate["pred"]},
+            top_station,
+            p_id,
+            p_time,
+            target,
+            figures_dir / "pred_vs_real.png")
+
+        for fig in (fig1, fig2, fig3):
+            mlflow.log_artifact(str(fig))
+
+        summary = {
+            "candidate_version": candidate["version"],
+            "candidate_mae": candidate_mae,
+            "champion_mae": champion_mae,
+            "promoted": promoted,
+            "best_xgboost_params": best_params,
+            "cutoff": str(cutoff),
+        }
+
+        (reports_dir / "metrics.json").write_text(json.dumps(summary,indent=2,default=str))
+
         mlflow.log_artifact(str(reports_dir / "metrics.json"))
-        summary["parent_run_id"] = parent.info.run_id
-    logger.info("Champion: %s\n%s", champion, res_df.to_string(index=False))
+
+        summary["parent_run_id"] = (parent.info.run_id)
+
+    logger.info( "Promoted=%s Candidate MAE=%.4f",promoted,candidate_mae)
+
     return summary
 
 
@@ -270,7 +407,7 @@ def main(params_path, model_opt, features_file):
     """Entrena, ajusta, evalúa y registra los modelos."""
     params = load_params(params_path)
     models = MODEL_NAMES if model_opt == "all" else (model_opt,)
-    run_training(params, models, resolve_path(features_file) if features_file else None)
+    run_training(params, resolve_path(features_file) if features_file else None)
 
 
 if __name__ == "__main__":
